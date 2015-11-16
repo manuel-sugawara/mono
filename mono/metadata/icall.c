@@ -1777,9 +1777,16 @@ ves_icall_System_MonoMethodInfo_get_retval_marshal (MonoMethod *method)
 	MonoDomain *domain = mono_domain_get (); 
 	MonoReflectionMarshalAsAttribute* res = NULL;
 	MonoMarshalSpec **mspecs;
+	MonoMethodSignature *sig;
 	int i;
 
-	mspecs = g_new (MonoMarshalSpec*, mono_method_signature (method)->param_count + 1);
+	sig = mono_method_signature_checked (method, &error);
+	if (!mono_error_ok (&error)) {
+		mono_error_set_pending_exception (&error);
+		return NULL;
+	}
+
+	mspecs = g_new (MonoMarshalSpec*, sig->param_count + 1);
 	mono_method_get_marshal_info (method, mspecs);
 
 	if (mspecs [0]) {
@@ -1789,8 +1796,8 @@ ves_icall_System_MonoMethodInfo_get_retval_marshal (MonoMethod *method)
 			return NULL;
 		}
 	}
-		
-	for (i = mono_method_signature (method)->param_count; i >= 0; i--)
+
+	for (i = sig->param_count; i >= 0; i--)
 		if (mspecs [i])
 			mono_metadata_free_marshal_spec (mspecs [i]);
 	g_free (mspecs);
@@ -2962,7 +2969,14 @@ leave:
 ICALL_EXPORT gboolean
 ves_icall_MonoMethod_get_IsGenericMethod (MonoReflectionMethod *method)
 {
-	return mono_method_signature (method->method)->generic_param_count != 0;
+	MonoError error;
+	MonoMethodSignature *sig = mono_method_signature_checked (method->method, &error);
+	if (!mono_error_ok (&error)) {
+		mono_error_set_pending_exception (&error);
+		return FALSE;
+	}
+
+	return sig->generic_param_count != 0;
 }
 
 ICALL_EXPORT gboolean
@@ -2978,6 +2992,7 @@ ves_icall_MonoMethod_GetGenericArguments (MonoReflectionMethod *method)
 	MonoReflectionType *rt;
 	MonoArray *res;
 	MonoDomain *domain;
+	MonoMethodSignature *sig;
 	int count, i;
 
 	domain = mono_object_domain (method);
@@ -3000,7 +3015,13 @@ ves_icall_MonoMethod_GetGenericArguments (MonoReflectionMethod *method)
 		}
 	}
 
-	count = mono_method_signature (method->method)->generic_param_count;
+	sig = mono_method_signature_checked (method->method, &error);
+	if (!mono_error_ok (&error)) {
+		mono_error_set_pending_exception (&error);
+		return NULL;
+	}
+	
+	count = sig->generic_param_count;
 	res = mono_array_new (domain, mono_defaults.systemtype_class, count);
 
 	for (i = 0; i < count; i++) {
@@ -3027,12 +3048,18 @@ ves_icall_InternalInvoke (MonoReflectionMethod *method, MonoObject *this_arg, Mo
 	 * greater flexibility.
 	 */
 	MonoMethod *m = method->method;
-	MonoMethodSignature *sig = mono_method_signature (m);
+	MonoMethodSignature *sig = mono_method_signature_checked (m, &error);
 	MonoImage *image;
 	int pcount;
 	void *obj = this_arg;
 
+	if (!mono_error_ok (&error)) {
+		*exc = mono_error_convert_to_exception (&error);
+		return NULL;
+	}
+
 	*exc = NULL;
+
 
 	if (mono_security_core_clr_enabled ())
 		mono_security_core_clr_ensure_reflection_access_method (m);
@@ -3157,12 +3184,19 @@ ves_icall_InternalInvoke (MonoReflectionMethod *method, MonoObject *this_arg, Mo
 ICALL_EXPORT MonoObject *
 ves_icall_InternalExecute (MonoReflectionMethod *method, MonoObject *this_arg, MonoArray *params, MonoArray **outArgs) 
 {
+	MonoError error;
 	MonoDomain *domain = mono_object_domain (method); 
 	MonoMethod *m = method->method;
-	MonoMethodSignature *sig = mono_method_signature (m);
+	MonoMethodSignature *sig = mono_method_signature_checked (m, &error);
 	MonoArray *out_args;
 	MonoObject *result;
 	int i, j, outarg_count = 0;
+
+	if (!mono_error_ok (&error)) {
+		mono_error_set_pending_exception (&error);
+		return NULL;
+	}
+
 
 	if (m->klass == mono_defaults.object_class) {
 		if (!strcmp (m->name, "FieldGetter")) {
@@ -7732,14 +7766,22 @@ ves_icall_ParameterInfo_GetTypeModifiers (MonoReflectionParameter *param, MonoBo
 
 	image = method->klass->image;
 	pos = param->PositionImpl;
-	sig = mono_method_signature (method);
+	sig = mono_method_signature_checked (method, &error);
+	if (!mono_error_ok (&error)) {
+		mono_error_set_pending_exception (&error);
+		return NULL;
+	}
+
 	if (pos == -1)
 		type = sig->ret;
 	else
 		type = sig->params [pos];
 
 	res = type_array_from_modifiers (image, type, optional, &error);
-	mono_error_raise_exception (&error);
+	if (!mono_error_ok (&error)) {
+		mono_error_set_pending_exception (&error);
+		return NULL;
+	}
 	return res;
 }
 
