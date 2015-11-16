@@ -1499,4 +1499,5 @@ mono_class_has_failure (MonoClass *klass)
 	return mono_class_get_failure (klass) != MONO_EXCEPTION_NONE;
 }
 
+
 #endif /* __MONO_METADATA_CLASS_INTERNALS_H__ */

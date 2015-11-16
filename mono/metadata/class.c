@@ -74,6 +74,8 @@ static guint32 mono_field_resolve_flags (MonoClassField *field);
 static void mono_class_setup_vtable_full (MonoClass *klass, GList *in_setup);
 static void mono_generic_class_setup_parent (MonoClass *klass, MonoClass *gklass);
 
+static void mono_class_set_failure_from_mono_error (MonoClass *klass, const char *error_condition, MonoError *error);
+
 /*
 We use gclass recording to allow recursive system f types to be referenced by a parent.
 
@@ -1114,13 +1116,9 @@ mono_class_inflate_generic_method_full_checked (MonoMethod *method, MonoClass *k
 
 	inflated_methods_size += sizeof (MonoMethodInflated);
 
-	sig = mono_method_signature (method);
-	if (!sig) {
-		char *name = mono_type_get_full_name (method->klass);
-		mono_error_set_bad_image (error, method->klass->image, "Could not resolve signature of method %s:%s", name, method->name);
-		g_free (name);
+	sig = mono_method_signature_checked (method, error);
+	if (!sig)
 		goto fail;
-	}
 
 	if (sig->pinvoke) {
 		memcpy (&iresult->method.pinvoke, method, sizeof (MonoMethodPInvoke));
@@ -3945,6 +3943,7 @@ is_wcf_hack_disabled (void)
 static gboolean
 check_interface_method_override (MonoClass *klass, MonoMethod *im, MonoMethod *cm, gboolean require_newslot, gboolean interface_is_explicitly_implemented_by_class, gboolean slot_is_empty)
 {
+	MonoError error;
 	MonoMethodSignature *cmsig, *imsig;
 	if (strcmp (im->name, cm->name) == 0) {
 		if (! (cm->flags & METHOD_ATTRIBUTE_PUBLIC)) {
@@ -3965,10 +3964,15 @@ check_interface_method_override (MonoClass *klass, MonoMethod *im, MonoMethod *c
 				TRACE_INTERFACE_VTABLE (printf ("[FULL SLOT REFUSED]"));
 			}
 		}
-		cmsig = mono_method_signature (cm);
-		imsig = mono_method_signature (im);
-		if (!cmsig || !imsig) {
-			mono_class_set_failure (klass, MONO_EXCEPTION_TYPE_LOAD, g_strdup ("Could not resolve the signature of a virtual method"));
+
+		cmsig = mono_method_signature_checked (cm, &error);
+		if (!cmsig) {
+			mono_class_set_failure_from_mono_error (klass, "Could not resolve the signature of a virtual method", &error);
+			return FALSE;
+		}
+		imsig = mono_method_signature_checked (im, &error);
+		if (!imsig) {
+			mono_class_set_failure_from_mono_error (klass, "Could not resolve the signature of a virtual method", &error);
 			return FALSE;
 		}
 
@@ -4007,10 +4011,15 @@ check_interface_method_override (MonoClass *klass, MonoMethod *im, MonoMethod *c
 			TRACE_INTERFACE_VTABLE (printf ("[RANK CHECK FAILED]"));
 			return FALSE;
 		}
-		cmsig = mono_method_signature (cm);
-		imsig = mono_method_signature (im);
-		if (!cmsig || !imsig) {
-			mono_class_set_failure (klass, MONO_EXCEPTION_TYPE_LOAD, g_strdup ("Could not resolve the signature of a virtual method"));
+
+		cmsig = mono_method_signature_checked (cm, &error);
+		if (!cmsig) {
+			mono_class_set_failure_from_mono_error (klass, "Could not resolve the signature of a virtual method", &error);
+			return FALSE;
+		}
+		imsig = mono_method_signature_checked (im, &error);
+		if (!imsig) {
+			mono_class_set_failure_from_mono_error (klass, "Could not resolve the signature of a virtual method", &error);
 			return FALSE;
 		}
 
@@ -4623,11 +4632,14 @@ mono_class_setup_vtable_general (MonoClass *klass, MonoMethod **overrides, int o
 				while ((m1 = mono_class_get_virtual_methods (k, &k_iter))) {
 					MonoMethodSignature *cmsig, *m1sig;
 
-					cmsig = mono_method_signature (cm);
-					m1sig = mono_method_signature (m1);
-
-					if (!cmsig || !m1sig) {
-						mono_class_set_failure (klass, MONO_EXCEPTION_TYPE_LOAD, NULL);
+					cmsig = mono_method_signature_checked (cm, &error);
+					if (!cmsig) {
+						mono_class_set_failure_from_mono_error (klass, "Could not resolve the signature of a virtual method", &error);
+						return;
+					}
+					m1sig = mono_method_signature_checked (m1, &error);
+					if (!m1sig) {
+						mono_class_set_failure_from_mono_error (klass, "Could not resolve the signature of a virtual method", &error);
 						return;
 					}
 
@@ -9955,6 +9967,15 @@ mono_class_set_failure (MonoClass *klass, guint32 ex_type, void *ex_data)
 	mono_loader_unlock ();
 
 	return TRUE;
+}
+
+void
+mono_class_set_failure_from_mono_error (MonoClass *klass, const char *error_condition, MonoError *error)
+{
+	if (is_ok (error) || mono_class_has_failure (klass))
+		return;
+	mono_class_set_failure (klass, MONO_EXCEPTION_TYPE_LOAD, g_strdup_printf ("%s due to: %s", error_condition, mono_error_get_message (error)));
+	mono_error_cleanup (error);
 }
 
 /*
