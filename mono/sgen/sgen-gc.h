@@ -1039,19 +1039,35 @@ gboolean nursery_canaries_enabled (void);
 				memcpy ((char*) (addr) + (size), CANARY_STRING, CANARY_SIZE);	\
 			}
 
-#define CANARY_VALID(addr) (strncmp ((char*) (addr), CANARY_STRING, CANARY_SIZE) == 0)
+#define CANARY_VALID(addr) (memcmp ((char*) (addr), CANARY_STRING, CANARY_SIZE) == 0)
 
 #define CHECK_CANARY_FOR_OBJECT(addr,fail) if (nursery_canaries_enabled ()) {	\
 				char* canary_ptr = (char*) (addr) + sgen_safe_object_get_size_unaligned ((GCObject *) (addr));	\
 				if (!CANARY_VALID(canary_ptr)) {	\
-					char canary_copy[CANARY_SIZE +1];	\
-					strncpy (canary_copy, canary_ptr, CANARY_SIZE);	\
-					canary_copy[CANARY_SIZE] = 0;	\
-					if ((fail))			\
-						g_error ("CORRUPT CANARY:\naddr->%p\ntype->%s\nexcepted->'%s'\nfound->'%s'\n", (char*) addr, sgen_client_vtable_get_name (SGEN_LOAD_VTABLE ((addr))), CANARY_STRING, canary_copy); \
+					char *window_start, *window_end; \
+					window_start = (char*)(addr) - 512; \
+					if (!sgen_ptr_in_nursery (window_start)) \
+						window_start = sgen_get_nursery_start (); \
+					window_end = (char*)(addr) + 512; \
+					if (!sgen_ptr_in_nursery (window_end)) \
+						window_end = sgen_get_nursery_end (); \
+					fprintf (stderr, "\nObject data:\n"); \
+					fwrite (addr, sizeof (char), sgen_safe_object_get_size_unaligned ((GCObject *) (addr)), stderr); \
+					fprintf (stderr, "\nCanary zone (next 12 chars):\n"); \
+					fwrite (canary_ptr, sizeof (char), 12, stderr); \
+					fprintf (stderr, "\nOriginal canary string:\n"); \
+					fwrite (CANARY_STRING, sizeof (char), 8, stderr); \
+					for (int x = -8; x <= 8; x++) \
+						fprintf (stderr, "\nretesting: %d\n", memcmp (canary_ptr + x, CANARY_STRING, CANARY_SIZE)); \
+					fprintf (stderr, "\nSurrounding nursery (%p - %p):\n", window_start, window_end); \
+					fwrite (window_start, sizeof (char), window_end - window_start, stderr); \
+					if (0)			\
+						g_error ("CORRUPT CANARY:\naddr->%p\ntype->%s\nexpected->'%s'\n", (char*) addr, sgen_client_vtable_get_name (SGEN_LOAD_VTABLE ((addr))), CANARY_STRING); \
 					else				\
-						g_warning ("CORRUPT CANARY:\naddr->%p\ntype->%s\nexcepted->'%s'\nfound->'%s'\n", (char*) addr, sgen_client_vtable_get_name (SGEN_LOAD_VTABLE ((addr))), CANARY_STRING, canary_copy); \
-				} }
+						g_warning ("CORRUPT CANARY:\naddr->%p\ntype->%s\nexpected->'%s'\n", (char*) addr, sgen_client_vtable_get_name (SGEN_LOAD_VTABLE ((addr))), CANARY_STRING); \
+					} else { \
+						fprintf(stderr, "canary ok"); \
+} }
 
 /*
  * This causes the compile to extend the liveness of 'v' till the call to dummy_use

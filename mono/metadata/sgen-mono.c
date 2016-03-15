@@ -1054,7 +1054,7 @@ static gboolean use_managed_allocator = TRUE;
 static MonoMethod*
 create_allocator (int atype, gboolean slowpath)
 {
-	int p_var, size_var;
+	int p_var, size_var, real_size_var;
 	guint32 slowpath_branch, max_size_branch;
 	MonoMethodBuilder *mb;
 	MonoMethod *res;
@@ -1069,6 +1069,9 @@ create_allocator (int atype, gboolean slowpath)
 		mono_register_jit_icall (mono_gc_alloc_obj, "mono_gc_alloc_obj", mono_create_icall_signature ("object ptr int"), FALSE);
 		mono_register_jit_icall (mono_gc_alloc_vector, "mono_gc_alloc_vector", mono_create_icall_signature ("object ptr int int"), FALSE);
 		mono_register_jit_icall (mono_gc_alloc_string, "mono_gc_alloc_string", mono_create_icall_signature ("object ptr int int32"), FALSE);
+
+		/* we treat the canary string as an 8-byte value here, so this won't work if it's not */
+		g_assert (strlen(CANARY_STRING) == 8);
 		registered = TRUE;
 	}
 
@@ -1252,6 +1255,12 @@ create_allocator (int atype, gboolean slowpath)
 		g_assert_not_reached ();
 	}
 
+	if (nursery_canaries_enabled ()) {
+		real_size_var = mono_mb_add_local (mb, &mono_defaults.int_class->byval_arg);
+		mono_mb_emit_ldloc (mb, size_var);
+		mono_mb_emit_stloc(mb, real_size_var);
+	}
+
 	if (atype != ATYPE_SMALL) {
 		/* size += ALLOC_ALIGN - 1; */
 		mono_mb_emit_ldloc (mb, size_var);
@@ -1286,12 +1295,17 @@ create_allocator (int atype, gboolean slowpath)
 	mono_mb_emit_byte (mb, CEE_LDIND_I);
 	mono_mb_emit_stloc (mb, p_var);
 	
-	/* new_next = (char*)p + size; */
+	/* new_next = (char*)p + size; (add canary word size, if enabled) */
 	new_next_var = mono_mb_add_local (mb, &mono_defaults.int_class->byval_arg);
 	mono_mb_emit_ldloc (mb, p_var);
 	mono_mb_emit_ldloc (mb, size_var);
 	mono_mb_emit_byte (mb, CEE_CONV_I);
 	mono_mb_emit_byte (mb, CEE_ADD);
+
+	if (nursery_canaries_enabled ()) {
+			mono_mb_emit_icon (mb, CANARY_SIZE);
+			mono_mb_emit_byte (mb, CEE_ADD);
+	}
 	mono_mb_emit_stloc (mb, new_next_var);
 
 	/* if (G_LIKELY (new_next < tlab_temp_end)) */
@@ -1342,6 +1356,17 @@ create_allocator (int atype, gboolean slowpath)
 	mono_mb_emit_ldarg (mb, 0);
 	mono_mb_emit_byte (mb, CEE_STIND_I);
 
+	/* mark object end with nursery word */
+	if (nursery_canaries_enabled ()) {
+			mono_mb_emit_ldloc (mb, p_var);
+			mono_mb_emit_ldloc (mb, real_size_var);
+			mono_mb_emit_icon (mb, 0);
+			mono_mb_emit_byte (mb, MONO_CEE_ADD);
+			mono_mb_emit_byte (mb, MONO_CEE_ADD);
+			mono_mb_emit_icon8 (mb, *(uint64_t*) CANARY_STRING);
+			mono_mb_emit_byte (mb, MONO_CEE_STIND_I8);
+	}
+
 	if (atype == ATYPE_VECTOR) {
 		/* arr->max_length = max_length; */
 		mono_mb_emit_ldloc (mb, p_var);
@@ -1360,14 +1385,6 @@ create_allocator (int atype, gboolean slowpath)
 		mono_mb_emit_byte (mb, MONO_CEE_ADD);
 		mono_mb_emit_ldarg (mb, 1);
 		mono_mb_emit_byte (mb, MONO_CEE_STIND_I4);
-		/* s->chars [len] = 0; */
-		mono_mb_emit_ldloc (mb, p_var);
-		mono_mb_emit_ldloc (mb, size_var);
-		mono_mb_emit_icon (mb, 2);
-		mono_mb_emit_byte (mb, MONO_CEE_SUB);
-		mono_mb_emit_byte (mb, MONO_CEE_ADD);
-		mono_mb_emit_icon (mb, 0);
-		mono_mb_emit_byte (mb, MONO_CEE_STIND_I2);
 	}
 
 	/*
@@ -2973,9 +2990,6 @@ mono_gc_base_init (void)
 #endif
 
 	sgen_gc_init ();
-
-	if (nursery_canaries_enabled ())
-		sgen_set_use_managed_allocator (FALSE);
 
 #if defined(HAVE_KW_THREAD)
 	/* This can happen with using libmonosgen.so */
