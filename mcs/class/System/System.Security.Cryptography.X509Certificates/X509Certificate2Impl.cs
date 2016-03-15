@@ -73,6 +73,8 @@ namespace System.Security.Cryptography.X509Certificates
 
 		public abstract byte[] Export (X509ContentType contentType, string password);
 
+		public abstract bool Verify (X509Certificate2 thisCertificate);
+
 		public abstract void Reset ();
 
 #endif

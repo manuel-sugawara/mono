@@ -187,24 +187,6 @@ namespace System.Security.Cryptography.X509Certificates
 			_cert = null;
 		}
 
-		public X509Certificate2ImplMono (byte[] rawData, string password, X509KeyStorageFlags keyStorageFlags)
-		{
-			Import (rawData, password, keyStorageFlags);
-		}
-
-#if FIXME
-		public X509Certificate2ImplMono (IntPtr handle) : base (handle) 
-		{
-			_cert = new MX.X509Certificate (base.GetRawCertData ());
-		}
-
-		public X509Certificate2ImplMono (X509Certificate certificate) 
-			: base (certificate)
-		{
-			_cert = new MX.X509Certificate (base.GetRawCertData ());
-		}
-#endif
-
 		// properties
 
 		public override bool Archived {
@@ -626,20 +608,18 @@ namespace System.Security.Cryptography.X509Certificates
 			}
 		}
 
-#if FIXME
 		[MonoTODO ("by default this depends on the incomplete X509Chain")]
-		public bool Verify ()
+		public override bool Verify (X509Certificate2 thisCertificate)
 		{
 			if (_cert == null)
 				throw new CryptographicException (empty_error);
 
 			X509Chain chain = X509Chain.Create ();
-			if (!chain.Build (this))
+			if (!chain.Build (thisCertificate))
 				return false;
 			// TODO - check chain and other stuff ???
 			return true;
 		}
-#endif
 
 		// static methods
 

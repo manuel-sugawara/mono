@@ -327,13 +327,7 @@ namespace System.Security.Cryptography.X509Certificates {
 		[MonoTODO ("by default this depends on the incomplete X509Chain")]
 		public bool Verify ()
 		{
-			ThrowIfContextInvalid ();
-
-			X509Chain chain = X509Chain.Create ();
-			if (!chain.Build (this))
-				return false;
-			// TODO - check chain and other stuff ???
-			return true;
+			return Impl.Verify (this);
 		}
 
 		// static methods
